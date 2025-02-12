@@ -1,0 +1,132 @@
+---
+title: "Assignment 1"
+subtitle: "Dataset Selection and Initial Processing - GSE273848"
+author: "Hyunwoo Kwon"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    fig_caption: yes
+bibliography: assignment1.bib
+csl: biomed-central.csl
+---
+
+# Selecting the Dataset
+
+### **Why is the dataset of interest to you?**
+Esophageal adenocarcinoma (EAC) is a highly lethal cancer with poor prognosis. The study "Definition of a multi-omics signature for Esophageal Adenocarcinoma prognosis prediction [totalRNA-seq]" (GSE273848) investigates transcriptional signatures from immune cells to improve prognosis prediction. Understanding the immune response in EAC can help identify biomarkers for patient stratification and potential therapeutic targets.
+
+For this course, I searched the GEO database using the keyword "Esophageal Adenocarcinoma" to find an RNA-seq dataset relevant to immune response and prognosis. I used filters for "Expression profiling by high throughput sequencing" and "Homo sapiens" as the organism type.
+
+I selected GSE273848, which profiles immune cells from EAC patients using single-cell RNA sequencing (scRNA-seq) and bulk RNA-seq. The study identifies transcriptional changes associated with prognosis.
+
+### **Control and Test Conditions**
+The dataset contains tumor and matched non-tumor samples from therapy-naïve EAC patients. The control condition consists of non-tumor tissue samples, while the test condition consists of tumor tissue samples. In total, there are 23 samples with transcriptomic profiling.
+
+# Initial Processing
+
+## **Load Required Packages**
+```{r, message=FALSE}
+# Load necessary packages for data retrieval and processing
+library("GEOquery") # For querying and downloading from the GEO database
+library("edgeR") # For filtering and normalization of RNA-seq data
+library("biomaRt") # For mapping Ensembl IDs to HUGO symbols
+```
+
+## **Retrieve Dataset Information**
+```{r message=FALSE}
+# Define the GEO ID for the dataset and retrieve it using GEOquery
+dataset_geoID <- "GSE273848"
+gse <- getGEO(dataset_geoID, GSEMatrix=FALSE)
+```
+
+The dataset summary provides an overview of the experiment, including the conditions and sample metadata:
+```{r message = FALSE}
+gse@header$summary
+```
+
+## **Collecting Sample Annotation Data**
+```{r}
+# Extract metadata for each sample and format it into a structured dataframe
+list_of_samples <- gse@gsms
+sample_info <- do.call(rbind, lapply(list_of_samples,function(x){c(x@header$title, x@header$characteristics_ch1)}))
+sample_info <- as.data.frame(sample_info)
+colnames(sample_info) <- c("header", "patient ID", "sample type", "treatment")
+```
+
+### **Filtering for Tumor and Non-Tumor Samples**
+```{r}
+# Clean sample descriptions for easier filtering
+sample_info[,"sample type"] <- gsub("sample type: ", "", sample_info[,"sample type"])
+sample_info[,"treatment"] <- gsub("treatment: ", "", sample_info[,"treatment"])
+
+# Filter the dataset to retain only tumor and non-tumor samples
+sample_info <- sample_info[sample_info$sample.type %in% c("Tumor", "Non-Tumor"), ]
+```
+
+## **Download the Expression Data**
+```{r message = FALSE}
+# Retrieve and process supplementary files from GEO
+data_filename <- getGEOSuppFiles(dataset_geoID, fetch_files = FALSE)$fname[1]
+
+if (!file.exists("raw_counts.RData")) {
+  sfiles = getGEOSuppFiles(dataset_geoID, filter_regex = data_filename, fetch_files = TRUE)
+  untar(file.path(dataset_geoID, data_filename), exdir = "GSE273848_extracted")
+  
+  raw_count_data <- read.delim(file.path("GSE273848_extracted", data_filename), header=TRUE)
+  rownames(raw_count_data) <- raw_count_data[,1]
+  raw_count_data <- raw_count_data[, -1]
+  save(raw_count_data, file = "raw_counts.RData")
+} else {
+  load("raw_counts.RData")
+}
+```
+
+# **Normalization and Quality Control**
+
+### **Pre-Normalization Statistics**
+Before normalization, we examine the distribution of raw counts to assess data quality.
+```{r}
+summary(raw_count_data)
+boxplot(log2(cpm(raw_count_data)), main="Raw Count Distribution", col="lightblue")
+```
+
+### **Filtering Lowly Expressed Genes**
+To remove noise, we apply a filtering threshold to exclude genes with low expression across samples.
+```{r}
+filtered_counts <- raw_count_data[apply(cpm(raw_count_data), 1, function(x){sum(x > 1) >= 4}), ]
+```
+
+### **Normalization Using TMM**
+TMM (Trimmed Mean of M-values) normalization is used to correct for sequencing depth differences.
+```{r}
+d <- DGEList(counts=filtered_counts)
+d <- calcNormFactors(d, method="TMM")
+normalized_counts <- cpm(d, log=TRUE)
+```
+
+### **Post-Normalization Analysis**
+```{r}
+summary(normalized_counts)
+boxplot(normalized_counts, main="Normalized Data Distribution", col="lightgreen")
+```
+
+# **Mapping Gene Identifiers to HUGO Symbols**
+```{r}
+# Map Ensembl gene IDs to HUGO symbols
+ensembl_human <- useDataset("hsapiens_gene_ensembl", mart=useMart("ensembl"))
+id_conversion <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"), filters = "ensembl_gene_id", values = rownames(normalized_counts), mart = ensembl_human)
+normalized_counts_annot <- merge(id_conversion, normalized_counts, by.x = 1, by.y = 0, all.y = TRUE)
+normalized_counts_annot <- normalized_counts_annot[!is.na(normalized_counts_annot$hgnc_symbol), ]
+```
+
+# **Final Dataset Summary and Questions Answered**
+- **How many samples are in each condition?** The dataset includes 22 tumor and matched 18 non-tumor samples.
+- **Handling non-unique gene mappings?** There were couple duplicate genes shown in the samples. For the following sets of the data I have aggregated them by taking their mean expression.
+- **Handling unmapped genes?** Unmapped gene identifiers were discarded.
+- **Outliers and handling?** As I went through the original paper regarding the following stduy, I was not able to identify any action of removing the outliers. Therefore, I just did not do additional filtering regarding outliers.
+- **Handling replicates?** Replicates were retained separately for further analysis.
+- **Final dataset coverage?** Approximately 20386 genes remain after filtering and normalization.
+
+---
