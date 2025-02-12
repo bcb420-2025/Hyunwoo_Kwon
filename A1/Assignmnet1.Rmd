@@ -9,7 +9,6 @@ output:
     toc_depth: 3
     fig_caption: yes
 bibliography: assignment1.bib
-csl: biomed-central.csl
 ---
 
 # Selecting the Dataset
