@@ -28,6 +28,9 @@ The dataset contains tumor and matched non-tumor samples from therapy-naïve EAC
 ## **Load Required Packages**
 ```{r, message=FALSE}
 # Load necessary packages for data retrieval and processing
+BiocManager::install("GEOquery")
+BiocManager::install("edgeR")
+BiocManager::install("biomaRt")
 library("GEOquery") # For querying and downloading from the GEO database
 library("edgeR") # For filtering and normalization of RNA-seq data
 library("biomaRt") # For mapping Ensembl IDs to HUGO symbols
@@ -66,14 +69,31 @@ sample_info <- sample_info[sample_info$sample.type %in% c("Tumor", "Non-Tumor"),
 
 ## **Download the Expression Data**
 ```{r message = FALSE}
-# Retrieve and process supplementary files from GEO
+library(R.utils) # Needed for gunzip()
+
 data_filename <- getGEOSuppFiles(dataset_geoID, fetch_files = FALSE)$fname[1]
+print(paste("Data filename:", data_filename))
 
 if (!file.exists("raw_counts.RData")) {
+  print("Downloading GEO supplementary file...")
   sfiles = getGEOSuppFiles(dataset_geoID, filter_regex = data_filename, fetch_files = TRUE)
-  untar(file.path(dataset_geoID, data_filename), exdir = "GSE273848_extracted")
   
-  raw_count_data <- read.delim(file.path("GSE273848_extracted", data_filename), header=TRUE)
+  # Check if the file exists
+  downloaded_file <- file.path(dataset_geoID, data_filename)
+  print(paste("Downloaded file:", downloaded_file))
+  
+  # Unzip the file (since it's .gz, not a .tar archive)
+  extracted_file <- gsub(".gz$", "", downloaded_file) # Remove .gz extension
+  gunzip(downloaded_file, destname = extracted_file, remove = FALSE)
+
+  print("Extracted file:")
+  print(extracted_file)
+
+  # Read the unzipped file
+  raw_count_data <- read.delim(extracted_file, header=TRUE)
+  print("Raw data preview:")
+  print(head(raw_count_data))
+
   rownames(raw_count_data) <- raw_count_data[,1]
   raw_count_data <- raw_count_data[, -1]
   save(raw_count_data, file = "raw_counts.RData")
@@ -88,7 +108,9 @@ if (!file.exists("raw_counts.RData")) {
 Before normalization, we examine the distribution of raw counts to assess data quality.
 ```{r}
 summary(raw_count_data)
-boxplot(log2(cpm(raw_count_data)), main="Raw Count Distribution", col="lightblue")
+
+# Add a pseudocount (+1) to avoid log2(0) issues
+boxplot(log2(cpm(raw_count_data) + 1), main="Raw Count Distribution", col="lightblue")
 ```
 
 ### **Filtering Lowly Expressed Genes**
@@ -114,9 +136,22 @@ boxplot(normalized_counts, main="Normalized Data Distribution", col="lightgreen"
 # **Mapping Gene Identifiers to HUGO Symbols**
 ```{r}
 # Map Ensembl gene IDs to HUGO symbols
-ensembl_human <- useDataset("hsapiens_gene_ensembl", mart=useMart("ensembl"))
-id_conversion <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"), filters = "ensembl_gene_id", values = rownames(normalized_counts), mart = ensembl_human)
+# Load biomaRt
+library(biomaRt)
+
+# Connect to Ensembl (use latest dataset)
+ensembl_human <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+# Retrieve mapping of Ensembl Gene IDs to HUGO Symbols
+id_conversion <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
+                       filters = "ensembl_gene_id",
+                       values = rownames(normalized_counts),
+                       mart = ensembl_human)
+
+# Merge the mapped IDs with the normalized counts data
 normalized_counts_annot <- merge(id_conversion, normalized_counts, by.x = 1, by.y = 0, all.y = TRUE)
+
+# Remove unmapped rows
 normalized_counts_annot <- normalized_counts_annot[!is.na(normalized_counts_annot$hgnc_symbol), ]
 ```
 
