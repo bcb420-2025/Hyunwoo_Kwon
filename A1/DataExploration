@@ -1,0 +1,94 @@
+---
+title: "GSE273848 RNA-Seq Data Analysis"
+author: "Hyunwoo Kwon"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+#Downloading data using GEOquery
+# Load required libraries
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("GEOquery")
+library(GEOquery)
+
+# Define GEO dataset ID
+geo_id <- "GSE273848"
+data_dir <- "data"
+
+# Ensure the data directory exists
+if (!dir.exists(data_dir)) {
+    dir.create(data_dir)
+}
+
+# Define file path
+geo_file <- file.path(data_dir, paste0(geo_id, "_matrix.RData"))
+
+# Check if data is already downloaded
+if (!file.exists(geo_file)) {
+    gse <- getGEO(geo_id, GSEMatrix = TRUE)
+    save(gse, file = geo_file)
+} else {
+    load(geo_file)
+}
+
+# Extract expression data
+expression_data <- exprs(gse[[1]])
+head(expression_data)
+
+
+#assesing data quality
+# Summary statistics
+summary_stats <- summary(expression_data)
+summary_stats
+
+# Boxplot of expression values for control and test samples
+boxplot(expression_data, main = "Expression Data Distribution",
+        col = "lightblue", las = 2, outline = FALSE)
+
+#Map gene identifiers to HUGO symbols
+BiocManager::install("org.Hs.eg.db")
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+
+# Extract gene IDs
+gene_ids <- rownames(expression_data)
+
+# Map to HUGO symbols
+mapped_genes <- mapIds(org.Hs.eg.db, keys = gene_ids, 
+                        column = "SYMBOL", keytype = "ENSEMBL", 
+                        multiVals = "first")
+
+# Replace gene IDs with HUGO symbols
+expression_data_mapped <- expression_data
+rownames(expression_data_mapped) <- mapped_genes
+
+# Remove unmapped rows
+expression_data_mapped <- expression_data_mapped[!is.na(rownames(expression_data_mapped)), ]
+
+
+#Removing Outliers
+# Function to detect outliers
+detect_outliers <- function(x) {
+  q1 <- quantile(x, 0.25, na.rm = TRUE)
+  q3 <- quantile(x, 0.75, na.rm = TRUE)
+  iqr <- q3 - q1
+  lower <- q1 - 1.5 * iqr
+  upper <- q3 + 1.5 * iqr
+  return(x < lower | x > upper)
+}
+
+# Identify outliers
+outlier_matrix <- apply(expression_data_mapped, 1, detect_outliers)
+
+# Count the number of outliers per gene
+outlier_counts <- rowSums(outlier_matrix)
+summary(outlier_counts)
+
+# Remove genes with excessive outliers
+expression_data_cleaned <- expression_data_mapped[outlier_counts < ncol(expression_data_mapped) * 0.2, ]
+
+
