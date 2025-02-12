@@ -140,7 +140,8 @@ boxplot(normalized_counts, main="Normalized Data Distribution", col="lightgreen"
 library(biomaRt)
 
 # Connect to Ensembl (use latest dataset)
-ensembl_human <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+ensembl_human <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl") 
+#following code kept on causing error. 
 
 # Retrieve mapping of Ensembl Gene IDs to HUGO Symbols
 id_conversion <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
