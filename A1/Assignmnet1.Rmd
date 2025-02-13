@@ -136,24 +136,36 @@ boxplot(normalized_counts, main="Normalized Data Distribution", col="lightgreen"
 # **Mapping Gene Identifiers to HUGO Symbols**
 ```{r}
 # Map Ensembl gene IDs to HUGO symbols
-# Load biomaRt
+# Load biomaRt\
 library(biomaRt)
+library(BiocManager)
+install("BiocFileCache", force =  TRUE)
 
-# Connect to Ensembl (use latest dataset)
-ensembl_human <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl") 
-#following code kept on causing error. 
+# Test connection to Ensembl
+ensembl_human <- useDataset("hsapiens_gene_ensembl", mart=useMart("ensembl"))
 
-# Retrieve mapping of Ensembl Gene IDs to HUGO Symbols
-id_conversion <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
-                       filters = "ensembl_gene_id",
-                       values = rownames(normalized_counts),
-                       mart = ensembl_human)
+ids2convert <- rownames(normalized_counts)
 
-# Merge the mapped IDs with the normalized counts data
-normalized_counts_annot <- merge(id_conversion, normalized_counts, by.x = 1, by.y = 0, all.y = TRUE)
+# List available attributes
+attributes <- listAttributes(ensembl_human)
+print(head(attributes))  # Should return a valid list of attributes
 
-# Remove unmapped rows
-normalized_counts_annot <- normalized_counts_annot[!is.na(normalized_counts_annot$hgnc_symbol), ]
+# Print first few Ensembl IDs
+head(ids2convert)
+
+# Check the structure
+str(ids2convert)
+
+rownames(normalized_counts) <- as.character(rownames(normalized_counts))
+
+id_conversion <- getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                         filters = c("ensembl_gene_id"), values = ids2convert,
+                         mart = ensembl_human)
+
+# Check if mapping was successful
+dim(id_conversion)  # Should return a non-zero row count
+head(id_conversion) # Should show Ensembl IDs mapped to HUGO symbols
+
 ```
 
 # **Final Dataset Summary and Questions Answered**
