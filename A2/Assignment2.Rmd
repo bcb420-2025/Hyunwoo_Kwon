@@ -1,0 +1,249 @@
+---
+title: "Assignment 2: Gene Expression Analysis and Preliminary ORA"
+author: "Hyunwoo Kwon"
+date: "`r Sys.Date()`"
+bibliography: "assignment2.bib"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        fig_caption: yes
+        number_sections: true
+        theme: cosmo
+        highlight: tango
+        code_folding: show
+        df_print: paged
+        self_contained: no
+nocite: '@*'
+---
+
+# **Set Up**
+```{r eval=TRUE, message=FALSE}
+# Install dependencies
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+if (!require("edgeR", quietly = TRUE))
+    BiocManager::install("edgeR")
+
+if (!require("limma", quietly = TRUE))
+    BiocManager::install("limma")
+
+if (!require("gprofiler2", quietly = TRUE))
+    BiocManager::install("gprofiler2")
+
+if (!require("ggplot2", quietly = TRUE))
+    install.packages("ggplot2")
+
+if (!require("pheatmap", quietly = TRUE))
+    install.packages("pheatmap")
+```
+
+Loading Normalized Data from A1
+```{r eval=TRUE, message=FALSE}
+# Load normalized count matrix from Assignment 1
+destfile <- "normalized_counts.rds"
+saveRDS(normalized_counts, "normalized_counts.rds")
+
+if (!file.exists(destfile)) {
+  download.file(
+    url = "https://raw.githubusercontent.com/bcb420-2025/Hyunwoo_Kwon/main/A1/normalized_counts.rds", 
+    destfile = destfile
+  )
+}
+
+# Load data
+normalized_counts <- readRDS(destfile)
+head(normalized_counts)
+
+```
+
+Creating a design Matrix
+```{r eval=TRUE, message=FALSE}
+# Get the correct number of samples
+num_samples <- length(colnames(normalized_counts)[-1]) 
+
+# Assuming 2 conditions per patient, adjust dynamically
+num_patients <- floor(num_samples / 2) 
+
+# Automatically assign conditions
+conditions <- rep(c("Tumor", "Non-Tumor"), length.out = num_samples) 
+
+# Generate patient IDs dynamically
+patients <- rep(paste0("P", 1:num_patients), each = 2, length.out = num_samples)
+
+# Verify that both vectors have the correct length
+print(length(conditions))
+print(length(patients))
+
+# Create a design data frame
+design <- data.frame(
+  sample = colnames(normalized_counts)[-1],  # Column names as sample names
+  patient = patients,
+  condition = conditions
+)
+
+# Convert to model matrix
+model_matrix <- model.matrix(~ patient + condition, data = design)
+
+# View model matrix
+print(head(model_matrix))
+```
+
+
+Differentiate expressing using Limma
+```{r eval=TRUE, message=FALSE}
+# Ensure normalized_counts is a data frame
+normalized_counts <- as.data.frame(normalized_counts)
+
+# Check if hgnc_symbol exists as a column or rownames
+if ("hgnc_symbol" %in% colnames(normalized_counts)) {
+  gene_names <- normalized_counts$hgnc_symbol
+} else if (!is.null(rownames(normalized_counts))) {
+  gene_names <- rownames(normalized_counts)
+} else {
+  stop("Error: 'hgnc_symbol' not found as a column or row names in normalized_counts")
+}
+
+# Convert to matrix
+expression_data <- as.matrix(normalized_counts[, -1])
+rownames(expression_data) <- gene_names  # Assign gene names
+
+# Fit linear model
+fit <- limma::lmFit(expression_data, model_matrix)
+
+# Apply empirical Bayes moderation
+fit <- limma::eBayes(fit)
+
+# Extract differentially expressed genes
+limma_results <- limma::topTable(fit, coef = "conditionTumor", adjust.method = "BH", number=nrow(expression_data))
+
+# View summary
+sprintf("Number of genes with p < 0.05: %d", sum(limma_results$P.Value < 0.05))
+sprintf("Number of genes that pass correction (FDR < 0.05): %d", sum(limma_results$adj.P.Val < 0.05))
+
+# Save results
+write.csv(limma_results, "limma_DE_results.csv")
+
+```
+
+
+
+Differentiate expressiong using edgeR
+```{r eval=TRUE, message=FALSE}
+# Define DGEList file from A1
+remove.packages("locfit")
+install.packages("locfit", dependencies=TRUE)
+
+dge_file <- "post_norm_dge.rds"
+
+# Check if file exists, otherwise download from GitHub
+if (!file.exists(dge_file)) {
+  download.file(
+    url = "https://raw.githubusercontent.com/bcb420-2025/Hyunwoo_Kwon/main/A1/post_norm_dge.rds",
+    destfile = dge_file
+  )
+}
+
+# Load the DGEList object
+dge <- readRDS(dge_file)
+
+# Load edgeR library
+library(edgeR)
+d <- estimateDisp(dge, model_matrix)
+
+# Fit the model using quasi-likelihood estimation
+fit <- glmQLFit(d, model_matrix)
+
+# Perform Quasi-Likelihood F-Test for "conditionTumor"
+qlf_test <- glmQLFTest(fit, coef = "conditionTumor")
+
+# Extract differentially expressed genes (DEGs)
+edgeR_results <- topTags(qlf_test, n = nrow(dge$counts))$table
+
+# Count significant genes
+sprintf("Number of genes with p < 0.05 (edgeR): %d", sum(edgeR_results$PValue < 0.05))
+sprintf("Number of genes passing correction (FDR < 0.05): %d", sum(edgeR_results$FDR < 0.05))
+
+# Save results to CSV
+write.csv(edgeR_results, "edgeR_DE_results.csv")
+
+```
+
+
+
+
+```{r eval=TRUE, message=FALSE}
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    install.packages("ggplot2")
+}
+
+# Load ggplot2
+library(ggplot2)
+
+# Create volcano plot
+ggplot(edgeR_results, aes(x = logFC, y = -log10(PValue), color = (FDR < 0.05))) +
+    geom_point(alpha = 0.7) +
+    scale_color_manual(values = c("gray", "red")) +
+    theme_minimal() +
+    labs(title = "Volcano Plot", x = "Log Fold Change", y = "-log10 P-Value") +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue")
+
+```
+
+
+```{r eval=TRUE, message=FALSE}
+if (!requireNamespace("pheatmap", quietly = TRUE)) {
+    install.packages("pheatmap")
+}
+# Load necessary library
+library(pheatmap)
+
+# Select top 50 differentially expressed genes
+top50 <- rownames(head(edgeR_results, 50))
+
+# Extract corresponding expression data
+heatmap_data <- normalized_counts[top50, ]
+
+# Generate heatmap
+pheatmap(heatmap_data, scale = "row", 
+         clustering_distance_rows = "euclidean", 
+         clustering_distance_cols = "euclidean", 
+         clustering_method = "complete",
+         show_rownames = TRUE, show_colnames = TRUE)
+
+
+```
+
+
+```{r eval=TRUE, message=FALSE}
+# Install gprofiler2 if necessary
+if (!requireNamespace("gprofiler2", quietly = TRUE))
+    BiocManager::install("gprofiler2")
+
+# Load package
+library(gprofiler2)
+
+# Extract significant genes
+significant_genes <- rownames(edgeR_results[edgeR_results$FDR < 0.05, ])
+
+# Perform enrichment analysis
+gost_results <- gost(query = significant_genes, organism = "hsapiens", sources = c("GO:BP", "KEGG"))
+
+# View results
+gost_results$result
+
+```
+
+**Calculate p-values for each of the genes in your expression set. How many genes were significantly differentially expressed? What thresholds did you use and why?
+**Multiple hypothesis testing - correct your p-values using a multiple hypothesis correction method. Which method did you use? And Why? How many genes passed correction?
+**Show the amount of differentially expressed genes using an MA Plot or a Volcano plot. Highlight genes of interest.
+**Visualize your top hits using a heatmap. Do you conditions cluster together? Explain why or why not.
+**Make sure all your figures have proper heading and labels. Every figure included in the report should have a detailed figure legend
+
+
+
+
+
+
+
